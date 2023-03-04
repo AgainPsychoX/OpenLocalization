@@ -1,42 +1,61 @@
-﻿using BepInEx;
-using HarmonyLib;
+﻿using HarmonyLib;
 using I2.Loc;
 using System;
-using System.IO;
-using UnityEngine;
 
 namespace OpenLocalization
 {
-    class LocalizationManagerPatches
+    static class LocalizationManagerPatches
     {   
         [HarmonyPatch(typeof(LocalizationManager), "RegisterSourceInResources")]
-        public class RegisterSourceInResourcesPatch
+        static class RegisterSourceInResourcesPatch
         {
+            /// <summary>
+            /// Function to be executed before the actual patched function.
+            /// </summary>
+            /// <param name="__state">
+            /// Index of next `LocalizationSource` to be added for the `LocalizationManager` 
+            /// after the original function run, which will load original assets.
+            /// If set to -1, there is no sources to add after the original function run.
+            /// </param>
+            /// <returns>Returns `true` is original function should run, `false` to prevent it. </returns>
             [HarmonyPrefix]
-            static bool Prefix()
+            static bool Prefix(out int __state)
             {
-                var loadMode = OpenLocalization.GetConfig().LoadMode.Value;
-                switch (loadMode)
+                __state = -1;
+                bool skipAssets = OpenLocalization.GetConfig().SkipAssets.Value;
+                if (skipAssets)
                 {
-                    case LoadMode.BeforeBuiltIns:
-                    case LoadMode.Replace:
-                        AddSource(GetExternalLanguageSource());
-                        break;
-                }
-                if (loadMode == LoadMode.Replace)
-                {
+                    foreach (var thing in OpenLocalization.GetInstance().LocalizationSources)
+                    {
+                        AddSource(thing.Data);
+                    }
                     return false; // prevents calling original function
                 }
-                return true;
+                else
+                {
+                    var list = OpenLocalization.GetInstance().LocalizationSources;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        if (list[i].Name == LocalizationSource.builtInSourceName)
+                        {
+                            __state = i + 1;
+                            break;
+                        }
+                        AddSource(list[i].Data);
+                    }
+                    return true;
+                }
             }
 
             [HarmonyPostfix]
-            static void Postfix()
+            static void Postfix(int __state)
             {
-                var loadMode = OpenLocalization.GetConfig().LoadMode.Value;
-                if (loadMode == LoadMode.AfterBuiltIns)
+                if (__state < 0) return;
+
+                var list = OpenLocalization.GetInstance().LocalizationSources;
+                for (int i = __state; i < list.Count; i++)
                 {
-                    AddSource(GetExternalLanguageSource());
+                    AddSource(list[i].Data);
                 }
             }
         }
@@ -51,76 +70,9 @@ namespace OpenLocalization
             AccessTools.Method(typeof(LocalizationManager), "RemoveSource").Invoke(null, new object[] { source });
         }
 
-        public static LanguageSourceData ImportLanguageSource(string directoryPath)
+        public static void ReloadSources()
         {
-            OpenLocalization.GetLogger().LogInfo($"Importing from directory '{directoryPath}'");
-            LanguageSourceData source = new LanguageSourceData();
-            foreach (string path in Directory.GetFiles(directoryPath))
-            {
-                string category = Path.GetFileNameWithoutExtension(path);
-                string content = File.ReadAllText(path);
-                OpenLocalization.GetLogger().LogDebug($"Importing translations for category '{category}' from file '{path}'");
-                source.Import_CSV(category, content, eSpreadsheetUpdateMode.Merge);
-            }
-            OpenLocalization.GetLogger().LogInfo(String.Format("Languages: {0}", String.Join(", ", source.GetLanguages())));
-            return source;
-        }
-
-        public static void ExportLanguageSource(LanguageSourceData source, string outputDirectoryPath)
-        {
-            OpenLocalization.GetLogger().LogInfo($"Exporting to directory '{outputDirectoryPath}'");
-            Directory.CreateDirectory(outputDirectoryPath);
-            foreach (string category in source.GetCategories(true, null))
-            {
-                string outputPath = outputDirectoryPath + "/" + category + ".csv";
-                OpenLocalization.GetLogger().LogDebug($"Exporting category '{category}' to file '{outputPath}'");
-                File.WriteAllText(outputPath, source.Export_CSV(category, ',', true));
-            }
-        }
-
-        static LanguageSourceData _externalSource = null;
-
-        public static LanguageSourceData GetExternalLanguageSource()
-        {
-            if (_externalSource == null)
-            {
-                _externalSource = ImportLanguageSource(Path.Combine(Application.dataPath, "Localization"));
-            }
-            return _externalSource;
-        }
-
-        public static LanguageSourceData GetBuiltInLanguageSource()
-        {
-            var found = LocalizationManager.Sources.Find(x => x.IsGlobalSource());
-            if (found != null) return found;
-
-            LanguageSourceAsset asset = ResourceManager.pInstance.GetAsset<LanguageSourceAsset>(LocalizationManager.GlobalSources[0]);
-            return asset.SourceData;
-        }
-
-        public static void ExportBuiltInLanguageSource(string onlyLanguage = null)
-        {
-            var source = GetBuiltInLanguageSource();
-            if (!string.IsNullOrWhiteSpace(onlyLanguage)) {
-                var languages = source.GetLanguages();
-                if (!languages.Contains(onlyLanguage))
-                {
-                    OpenLocalization.GetLogger().LogWarning(String.Format("Invalid language selected for exporting. Avaliable languages: ", String.Join(", ", languages)));
-                }
-                foreach (string language in languages)
-                {
-                    if (language == onlyLanguage) continue;
-                    source.RemoveLanguage(language);
-                }
-            }
-            ExportLanguageSource(source, Path.Combine(Application.dataPath, "LocalizationExport"));
-        }
-
-        public static void ReloadLocalizations()
-        {
-            OpenLocalization.GetLogger().LogInfo("Reloading...");
             LocalizationManager.Sources.Clear();
-            _externalSource = null;
             LocalizationManager.UpdateSources();
         }
     }

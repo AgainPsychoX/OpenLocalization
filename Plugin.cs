@@ -1,36 +1,23 @@
-﻿using BepInEx;
+﻿using System;
+using System.Linq;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
-using System;
-using System.ComponentModel;
-using System.Reflection;
 using UnityEngine;
 
 namespace OpenLocalization
 {
-    /// <summary>
-    /// Localization load mode.
-    /// </summary>
-    public enum LoadMode
-    {
-        
-        Disabled,
-        [Description("External as fallbacks")]
-        BeforeBuiltIns,
-        [Description("Replace")]
-        Replace,
-        [Description("Built-ins as fallbacks")]
-        AfterBuiltIns,
-    }
-
     [BepInPlugin(pluginGUID, pluginName, pluginVersion)]
     [BepInProcess("Pharaoh.exe")]
     public class OpenLocalization : BaseUnityPlugin
     {
         public const string pluginGUID = "com.github.AgainPsychoX.PANE.OpenLocalization";
         public const string pluginName = "OpenLocalization";
-        public const string pluginVersion = "0.1.1.0";
+        public const string pluginVersion = "0.2.0.0";
 
         private static OpenLocalization _instance;
         public static OpenLocalization GetInstance()
@@ -47,6 +34,7 @@ namespace OpenLocalization
             _instance = this;
             PrepareConfigEntries();
             Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), pluginGUID);
+            ReloadLocalizations();
             Logger.LogInfo($"Plugin {this.Info.Metadata.Name} is loaded!");
         }
 
@@ -58,85 +46,141 @@ namespace OpenLocalization
 
         public class MyConfig
         {
-            public ConfigEntry<LoadMode> LoadMode;
-            public ConfigEntry<string> ExportOnlyLanguage;
+            internal ConfigEntry<string> LocalizationsDirectoryRaw;
+            public ConfigEntry<bool> SkipAssets;
+
+            public string LocalizationsDirectory
+            {
+                get {
+                    return Path.GetFullPath(LocalizationsDirectoryRaw.Value);
+                }
+                set {
+                    LocalizationsDirectoryRaw.Value = PathUtils.GetPathPossiblyRelativeToGameRoot(value);
+                }
+            }
         }
         protected void PrepareConfigEntries()
         {
             ConfigEntries = new MyConfig();
 
-            ConfigEntries.LoadMode = Config.Bind("General", "Localization load mode", LoadMode.BeforeBuiltIns,
-                new ConfigDescription("Decides how to load the external (unofficial) localizations related to the built-ins (official ones). You might need to restart the game for changes to apply."));
-            Config.Bind("General", "_reloadButton", "",
-                new ConfigDescription("Reloads external locaizations (from `Pharaoh_Data\\Localization` folder) for faster in-game testing.`)", null,
+            ConfigEntries.LocalizationsDirectoryRaw = Config.Bind("General", "LocalizationsDirectory", PathUtils.GetPathPossiblyRelativeToGameRoot(DefaultLocalizationsDirectory),
+                new ConfigDescription("Directory path used for storing and loading the localizations files."));
+            ConfigEntries.SkipAssets = Config.Bind("General", "SkipAssets", true,
+                new ConfigDescription("Skips loading the built-in localizations from assets. If no localization files are found, the assets will be converted to the files then used."));
+            ConfigEntries.SkipAssets.SettingChanged += SkipAssetsSettingChanged;
+
+            Config.Bind("General", "_Reload", false,
+                new ConfigDescription("Button to reload the localizations", null,
                     new ConfigurationManagerAttributes
                     {
                         HideSettingName = true,
                         HideDefaultButton = true,
                         ReadOnly = true,
                         CustomDrawer = (ConfigEntryBase entry) => {
-                            if (GUILayout.Button("Reload external localization", GUILayout.ExpandWidth(true)))
+                            if (GUILayout.Button("Reload the localizations", GUILayout.ExpandWidth(true)))
                             {
-                                LocalizationManagerPatches.ReloadLocalizations();
+                                ReloadLocalizations();
+                                entry.BoxedValue = false;
                             }
                         },
                     }
                 )
             );
-
-            var builtInLanguages = LocalizationManagerPatches.GetBuiltInLanguageSource().GetLanguages();
-            ConfigEntries.ExportOnlyLanguage = Config.Bind("Exporting", "Export only language", "English",
-                new ConfigDescription("", new AcceptableValueList<string>(builtInLanguages.ToArray()), new ConfigurationManagerAttributes { Order = 1999 }));
-            Config.Bind("Exporting", "_exportButton", "",
-                new ConfigDescription("Exports built-in localization (embedded in the game assets) into CSV files, into `Pharaoh_Data\\LocalizationExport` folder.", null,
+            Config.Bind("General", "_Update", false,
+                new ConfigDescription("Button to update the localizations from online spreadsheets.", null,
                     new ConfigurationManagerAttributes
                     {
-                        HideSettingName = true, 
-                        HideDefaultButton = true, 
-                        ReadOnly = true, 
-                        Order = 1998,
+                        HideSettingName = true,
+                        HideDefaultButton = true,
+                        ReadOnly = true,
                         CustomDrawer = (ConfigEntryBase entry) => {
-                            if (GUILayout.Button("Export built-in localization", GUILayout.ExpandWidth(true)))
+                            if (GUILayout.Button("Update the localizations from online", GUILayout.ExpandWidth(true)))
                             {
-                                LocalizationManagerPatches.ExportBuiltInLanguageSource(ConfigEntries.ExportOnlyLanguage.Value);
+                                UpdateLocalizations();
+                                entry.BoxedValue = false;
                             }
                         },
                     }
                 )
             );
 
-            Config.Bind("Loaded languages", "_listLanguages", "",
+            Config.Bind("Information", "_Info", "",
                 new ConfigDescription("", null,
                     new ConfigurationManagerAttributes
                     {
                         HideSettingName = true,
-                        HideDefaultButton = true, 
+                        HideDefaultButton = true,
                         ReadOnly = true,
-                        CustomDrawer = (ConfigEntryBase entry) => {
+                        CustomDrawer = (ConfigEntryBase entry) =>
+                        {
                             GUILayout.Label(
-                                String.Format("Built-in languages: \n{0}", 
-                                    ConfigEntries.LoadMode.Value == LoadMode.Replace 
-                                        ? "(replaced)" 
-                                        : String.Join("\n", builtInLanguages.ConvertAll(x => "+ " + x))
-                                ),
+                                String.Format("Built-in languages: \n{0}",
+                                    String.Join("\n", BuiltInLocalizationSource.Data.GetLanguages().ConvertAll(x => "+ " + x))),
                                 GUILayout.ExpandWidth(true)
-                           );
-                           GUILayout.Label(
-                                String.Format("External languages: \n{0}",
-                                    String.Join("\n", LocalizationManagerPatches.GetExternalLanguageSource().GetLanguages().ConvertAll(x => "+ " + x))
-                                ),
-                                GUILayout.ExpandWidth(true)
-                           );
+                            );
                             GUILayout.Label(
-                                String.Format("All languages: \n{0}",
-                                    String.Join("\n", I2.Loc.LocalizationManager.GetAllLanguages().ConvertAll(x => "+ " + x))
-                                ),
-                                GUILayout.ExpandWidth(true)
-                           );
+                                 String.Format("All languages: \n{0}",
+                                     String.Join("\n", I2.Loc.LocalizationManager.GetAllLanguages().ConvertAll(x => "+ " + x))),
+                                 GUILayout.ExpandWidth(true)
+                            );
+                            GUILayout.BeginVertical();
+                            GUILayout.Label("Mod written by AgainPsychoX#4444.\nSpecial thanks to Danie!#9942 and Takia_Gecko#1037.", GUILayout.ExpandWidth(true));
+                            if (GUILayout.Button("Join our Discord!", GUILayout.ExpandWidth(true)))
+                            {
+                                System.Diagnostics.Process.Start("https://discord.gg/avWq99Aw");
+                            }
+                            GUILayout.EndVertical();
                         },
                     }
                 )
             );
+        }
+
+        private void SkipAssetsSettingChanged(object sender, EventArgs e)
+        {
+            if (ConfigEntries.SkipAssets.Value)
+            {
+                BuiltInLocalizationSource.Load();
+            }
+            else
+            {
+                BuiltInLocalizationSource.SourceData = LocalizationSource.GetBuiltInLanguageSourceFromAssets();
+            }
+        }
+
+        static public string DefaultLocalizationsDirectory
+        {
+            get {
+                return Path.Combine(BepInEx.Paths.GameRootPath, "Localizations");
+            }
+        }
+
+        public List<LocalizationSource> LocalizationSources { get; protected set;  }
+
+        public LocalizationSource BuiltInLocalizationSource { get; protected set; }
+
+        protected void ReloadLocalizations()
+        {
+            Logger.LogInfo("Reloading...");
+            LocalizationSources?.Clear();
+            LocalizationSources = LocalizationSource.LoadAll(GetConfig().LocalizationsDirectory).OrderBy(s => s.Order).ToList();
+            BuiltInLocalizationSource = LocalizationSources.Find(s => s.Name == LocalizationSource.builtInSourceName);
+            if (ConfigEntries.SkipAssets.Value)
+            {
+                BuiltInLocalizationSource.SourceData = LocalizationSource.GetBuiltInLanguageSourceFromAssets();
+            }
+            LocalizationManagerPatches.ReloadSources();
+            Logger.LogInfo("Reloaded!");
+        }
+
+        protected void UpdateLocalizations()
+        {
+            Logger.LogInfo("Updating...");
+            foreach (var source in LocalizationSources)
+            {
+                source.Update();
+            }
+            Logger.LogInfo("Updated!");
         }
     }
 }
