@@ -3,7 +3,7 @@
 
 Mod for [Pharaoh: A New Era](https://store.steampowered.com/app/1351080/Pharaoh_A_New_Era/) game that allows loading unofficial localizations.
 
-[Join modding community at Discord!](https://discord.gg/avWq99Aw)
+[Join modding community at Discord!](https://discord.gg/n5phrj222e)
 
 
 

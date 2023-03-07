@@ -127,7 +127,7 @@ namespace OpenLocalization
                             GUILayout.Label("Mod written by AgainPsychoX#4444.\nSpecial thanks to Danie!#9942 and Takia_Gecko#1037.", GUILayout.ExpandWidth(true));
                             if (GUILayout.Button("Join our Discord!", GUILayout.ExpandWidth(true)))
                             {
-                                System.Diagnostics.Process.Start("https://discord.gg/avWq99Aw");
+                                System.Diagnostics.Process.Start("https://discord.gg/n5phrj222e");
                             }
                             GUILayout.EndVertical();
                         },
